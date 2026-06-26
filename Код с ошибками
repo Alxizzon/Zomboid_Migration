@@ -1,0 +1,102 @@
+RealisticMigration = {}
+RealisticMigration.alpha = 3.0 
+
+local function getForestDensity(x, y, z)
+    local cell = getCell()
+    if not cell then return 0 end
+
+    local treeCount = 0
+    local totalCheck = 0
+    local radius = 3 
+
+    for dx = -radius, radius do
+        for dy = -radius, radius do
+            totalCheck = totalCheck + 1
+            local square = cell:getGridSquare(x + dx, y + dy, z)
+            if square then
+                if square:getTree() or square:getProperties():Is(IsoFlagType.vegetation) then
+                    treeCount = treeCount + 1
+                end
+            end
+        end
+    end
+
+    if totalCheck == 0 then return 0 end
+    return treeCount / totalCheck
+end
+
+local function initHooks()
+    if not ZombiePopulationManager or not ZombiePopulationManager.instance then return end
+
+    local original_addZombieStanding = ZombiePopulationManager.instance.addZombieStanding
+    local original_addZombieMoving = ZombiePopulationManager.instance.addZombieMoving
+
+    ZombiePopulationManager.instance.addZombieStanding = function(self, x, y, z, outfitID)
+        local Kf = getForestDensity(x, y, z)
+        if Kf > 0.4 then
+            local spawnChance = (1 - Kf) ^ RealisticMigration.alpha
+            if ZombRand(100) / 100 > spawnChance then
+                local player = getSpecificPlayer(0)
+                if player then
+                    HaloTextHelper.addText(player, "Spawn Blocked (Forest Density: " .. string.format("%.2f", Kf) .. ")", HaloTextHelper.getColorGreen())
+                end
+                return 
+            end
+        end
+        original_addZombieStanding(self, x, y, z, outfitID)
+    end
+
+    ZombiePopulationManager.instance.addZombieMoving = function(self, x, y, z, outfitID)
+        local Kf = getForestDensity(x, y, z)
+        if Kf > 0.4 then
+            local spawnChance = (1 - Kf) ^ RealisticMigration.alpha
+            if ZombRand(100) / 100 > spawnChance then
+                local player = getSpecificPlayer(0)
+                if player then
+                    HaloTextHelper.addText(player, "Migration Spawn Blocked", HaloTextHelper.getColorGreen())
+                end
+                return 
+            end
+        end
+        original_addZombieMoving(self, x, y, z, outfitID)
+    end
+end
+
+function RealisticMigration.OnPlayerMove(player)
+    if not player or not SandboxOptions or not SandboxOptions.instance then return end
+
+    -- Ограничим частоту проверок, чтобы игра не спамила текст на каждый пиксель движения
+    local ticks = player:getTicksSinceLastUpdate()
+    if ticks % 30 ~= 0 then return end 
+
+    local x = player:getX()
+    local y = player:getY()
+    local z = player:getZ()
+    
+    local Kf = getForestDensity(x, y, z)
+    local sandbox = SandboxOptions.instance.zombieConfig
+    if not sandbox then return end
+
+    -- Показываем текущую плотность леса в реальном времени белым цветом
+    HaloTextHelper.addText(player, "Forest Density: " .. string.format("%.2f", Kf), HaloTextHelper.getColorWhite())
+
+    -- Снижаем порог до 0.4 для фиксации захода в лес
+    if Kf > 0.4 then
+        if sandbox.RedistributeHours ~= 720 then
+            sandbox.RedistributeHours = 720 
+            ZombiePopulationManager.instance:onConfigReloaded()
+            HaloTextHelper.addText(player, "[MIGRATION FROZEN]", HaloTextHelper.getColorRed())
+        end
+    else
+        if sandbox.RedistributeHours == 720 then
+            sandbox.RedistributeHours = 12 
+            ZombiePopulationManager.instance:onConfigReloaded()
+            HaloTextHelper.addText(player, "[MIGRATION NORMAL]", HaloTextHelper.getColorGreen())
+        end
+    end
+end
+
+Events.OnGameStart.Add(initHooks)
+Events.OnPlayerMove.Add(RealisticMigration.OnPlayerMove)
+
+print("[RealisticMigration] Скрипт успешно прочитан движком с поддержкой HaloText.")
